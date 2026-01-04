@@ -1,0 +1,7 @@
+{
+  "name": "El Neguev - Comida Criolla",
+  "description": "Aplicación oficial del restaurante El Neguev para pedidos del plato del día, gestión administrativa y seguimiento de repartos en tiempo real.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
