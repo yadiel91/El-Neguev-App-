@@ -5,8 +5,11 @@ const KEYS = {
   ORDERS: 'el_neguev_orders',
   MENU: 'el_neguev_menu',
   DELIVERY_PEOPLE: 'el_neguev_delivery_people',
-  LOCATIONS: 'el_neguev_delivery_locations'
+  LOCATIONS: 'el_neguev_delivery_locations',
+  CATEGORIES: 'el_neguev_categories'
 };
+
+const DEFAULT_CATEGORIES = ['Platos', 'Bebidas', 'Postres'];
 
 const DEFAULT_MENU: Dish[] = [
   {
@@ -107,6 +110,29 @@ export const StorageService = {
     localStorage.setItem(KEYS.ORDERS, JSON.stringify(updated));
   },
 
+  releaseOrder: (orderId: string) => {
+    const orders = StorageService.getOrders();
+    const updated = orders.map(o => o.id === orderId ? { 
+      ...o, 
+      deliveryAssignedTo: undefined,
+      status: OrderStatus.PENDING 
+    } : o);
+    localStorage.setItem(KEYS.ORDERS, JSON.stringify(updated));
+  },
+
+  cancelOrder: (orderId: string) => {
+    const orders = StorageService.getOrders();
+    const index = orders.findIndex(o => o.id === orderId);
+    if (index !== -1) {
+      orders[index] = { 
+        ...orders[index], 
+        status: OrderStatus.CANCELLED,
+        deliveryAssignedTo: undefined 
+      };
+      localStorage.setItem(KEYS.ORDERS, JSON.stringify(orders));
+    }
+  },
+
   updateDeliveryLocation: (deliveryId: string, location: LatLng) => {
     const locations = JSON.parse(localStorage.getItem(KEYS.LOCATIONS) || '{}');
     locations[deliveryId] = location;
@@ -141,5 +167,14 @@ export const StorageService = {
   getDeliveryPeople: (): DeliveryPerson[] => {
     const data = localStorage.getItem(KEYS.DELIVERY_PEOPLE);
     return data ? JSON.parse(data) : DEFAULT_DELIVERY;
+  },
+
+  getCategories: (): string[] => {
+    const data = localStorage.getItem(KEYS.CATEGORIES);
+    return data ? JSON.parse(data) : DEFAULT_CATEGORIES;
+  },
+
+  saveCategories: (categories: string[]) => {
+    localStorage.setItem(KEYS.CATEGORIES, JSON.stringify(categories));
   }
 };

@@ -1,38 +1,49 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { StorageService } from '../services/storageService';
-import { Order, OrderStatus, PaymentMethod } from '../types';
+import { Order, OrderStatus, PaymentMethod, DeliveryPerson } from '../types';
 
 const DeliveryView: React.FC = () => {
   const [activeOrders, setActiveOrders] = useState<Order[]>([]);
+  const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE');
-  const [currentDeliveryMan] = useState('d1'); 
+  const [currentDeliveryManId, setCurrentDeliveryManId] = useState<string | null>(localStorage.getItem('el_neguev_delivery_id'));
+  const [deliveryPeople, setDeliveryPeople] = useState<DeliveryPerson[]>([]);
   const watchIdRef = useRef<number | null>(null);
 
   useEffect(() => {
+    setDeliveryPeople(StorageService.getDeliveryPeople());
     refresh();
     const interval = setInterval(refresh, 5000);
     return () => {
       clearInterval(interval);
       if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     };
-  }, []);
+  }, [currentDeliveryManId]);
 
   const refresh = () => {
+    if (!currentDeliveryManId) return;
     const all = StorageService.getOrders();
     
     // Filter active orders (assigned to me and not delivered/cancelled)
     const active = all.filter(o => 
-      o.deliveryAssignedTo === currentDeliveryMan && 
+      o.deliveryAssignedTo === currentDeliveryManId && 
       o.status !== OrderStatus.DELIVERED && 
       o.status !== OrderStatus.CANCELLED
     );
     setActiveOrders(active);
 
+    // Filter available orders (unassigned and pending)
+    const available = all.filter(o => 
+      !o.deliveryAssignedTo && 
+      o.status === OrderStatus.PENDING
+    );
+    setAvailableOrders(available);
+
     // Filter completed orders (assigned to me and delivered)
     const completed = all.filter(o => 
-      o.deliveryAssignedTo === currentDeliveryMan && 
+      o.deliveryAssignedTo === currentDeliveryManId && 
       o.status === OrderStatus.DELIVERED
     ).sort((a, b) => b.createdAt - a.createdAt);
     setCompletedOrders(completed);
@@ -46,13 +57,45 @@ const DeliveryView: React.FC = () => {
     }
   };
 
+  const handleTakeOrder = (orderId: string) => {
+    if (currentDeliveryManId) {
+      StorageService.assignDelivery(orderId, currentDeliveryManId);
+      refresh();
+      alert("¡Pedido tomado con éxito! Ahora puedes recogerlo.");
+    }
+  };
+
+  const collectedCash = completedOrders
+    .filter(o => o.paymentMethod === PaymentMethod.CASH_ON_DELIVERY)
+    .reduce((sum, o) => sum + o.total, 0);
+
+  const handleReleaseOrder = (orderId: string) => {
+    if (confirm("¿Deseas liberar este pedido? Volverá a estar disponible para asignación.")) {
+      StorageService.releaseOrder(orderId);
+      refresh();
+      alert("Pedido liberado. Ahora el administrador puede asignarlo de nuevo.");
+    }
+  };
+
+  const handleSelectProfile = (id: string) => {
+    setCurrentDeliveryManId(id);
+    localStorage.setItem('el_neguev_delivery_id', id);
+  };
+
+  const handleLogout = () => {
+    if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = null;
+    setCurrentDeliveryManId(null);
+    localStorage.removeItem('el_neguev_delivery_id');
+  };
+
   const startTracking = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation || !currentDeliveryManId) return;
     
     watchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-        StorageService.updateDeliveryLocation(currentDeliveryMan, { lat: latitude, lng: longitude });
+        StorageService.updateDeliveryLocation(currentDeliveryManId, { lat: latitude, lng: longitude });
       },
       (err) => console.error("Error tracking location:", err),
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -61,9 +104,9 @@ const DeliveryView: React.FC = () => {
 
   const updateStatus = (orderId: string, status: OrderStatus) => {
     StorageService.updateOrderStatus(orderId, status);
-    if (status === OrderStatus.IN_TRANSIT) {
+    if (status === OrderStatus.IN_TRANSIT && currentDeliveryManId) {
       navigator.geolocation.getCurrentPosition((pos) => {
-        StorageService.updateDeliveryLocation(currentDeliveryMan, { 
+        StorageService.updateDeliveryLocation(currentDeliveryManId, { 
           lat: pos.coords.latitude, 
           lng: pos.coords.longitude 
         });
@@ -72,10 +115,49 @@ const DeliveryView: React.FC = () => {
     refresh();
   };
 
+  const currentPerson = deliveryPeople.find(p => p.id === currentDeliveryManId);
+
+  // Pantalla de Selección de Perfil
+  if (!currentDeliveryManId) {
+    return (
+      <div className="max-w-md mx-auto py-20 px-4 animate-in fade-in duration-500">
+        <div className="text-center mb-12">
+          <div className="w-24 h-24 bg-orange-100 rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 text-orange-600 shadow-xl">
+            <i className="fa-solid fa-motorcycle text-4xl"></i>
+          </div>
+          <h2 className="text-3xl font-black uppercase tracking-tight text-stone-800">Acceso Repartidor</h2>
+          <p className="text-stone-500 mt-2 font-medium">Selecciona tu perfil para ver tus órdenes</p>
+        </div>
+
+        <div className="space-y-4">
+          {deliveryPeople.map(person => (
+            <button 
+              key={person.id}
+              onClick={() => handleSelectProfile(person.id)}
+              className="w-full bg-white p-6 rounded-[2rem] border-2 border-stone-100 hover:border-orange-500 hover:shadow-xl transition-all flex items-center justify-between group"
+            >
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 rounded-2xl bg-stone-50 flex items-center justify-center text-stone-400 group-hover:bg-orange-50 group-hover:text-orange-600 transition-colors">
+                  <i className="fa-solid fa-user text-xl"></i>
+                </div>
+                <div className="text-left">
+                  <p className="font-black text-stone-800 uppercase tracking-tighter">{person.name}</p>
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Repartidor Activo</p>
+                </div>
+              </div>
+              <i className="fa-solid fa-chevron-right text-stone-200 group-hover:text-orange-500 transition-colors"></i>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const readyToPickUp = activeOrders.filter(o => o.status === OrderStatus.PREPARING || o.status === OrderStatus.PENDING);
   const inTransitOrders = activeOrders.filter(o => o.status === OrderStatus.IN_TRANSIT);
 
-  const OrderCard = ({ order }: { order: Order }) => (
+  // Fix: Renamed OrderCard to renderOrderCard and changed to a plain function to avoid TypeScript key prop error when used as a component in a list.
+  const renderOrderCard = (order: Order) => (
     <div key={order.id} className="bg-white rounded-[2rem] shadow-xl border border-stone-100 overflow-hidden hover:shadow-2xl transition-shadow duration-300">
       {order.paymentMethod === PaymentMethod.CASH_ON_DELIVERY && (
         <div className="bg-red-600 text-white px-8 py-2 text-center text-[10px] font-black uppercase tracking-widest">
@@ -93,9 +175,10 @@ const DeliveryView: React.FC = () => {
           <div className="flex items-center space-x-3">
              <span className="bg-stone-100 px-3 py-1 rounded-full text-[10px] font-mono font-bold text-stone-400">ID: #{order.id.toUpperCase()}</span>
              <span className={`text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest ${
+              !order.deliveryAssignedTo ? 'bg-stone-100 text-stone-600' :
               order.status === OrderStatus.IN_TRANSIT ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'
             }`}>
-              {order.status === OrderStatus.IN_TRANSIT ? 'EN RUTA' : 'LISTO PARA RECOGER'}
+              {!order.deliveryAssignedTo ? 'DISPONIBLE' : order.status === OrderStatus.IN_TRANSIT ? 'EN RUTA' : 'LISTO PARA RECOGER'}
             </span>
           </div>
           
@@ -124,7 +207,15 @@ const DeliveryView: React.FC = () => {
         </div>
 
         <div className="flex flex-col justify-center space-y-4 min-w-[240px]">
-          {order.status !== OrderStatus.IN_TRANSIT ? (
+          {!order.deliveryAssignedTo ? (
+            <button 
+              onClick={() => handleTakeOrder(order.id)}
+              className="w-full bg-stone-800 text-white py-5 rounded-2xl font-black hover:bg-stone-900 transition shadow-xl flex items-center justify-center uppercase tracking-widest text-sm active:scale-95"
+            >
+              <i className="fa-solid fa-hand-holding-heart mr-3"></i>
+              Tomar Pedido
+            </button>
+          ) : order.status !== OrderStatus.IN_TRANSIT ? (
             <button 
               onClick={() => updateStatus(order.id, OrderStatus.IN_TRANSIT)}
               className="w-full bg-orange-600 text-white py-5 rounded-2xl font-black hover:bg-orange-700 transition shadow-xl flex items-center justify-center uppercase tracking-widest text-sm active:scale-95"
@@ -160,6 +251,16 @@ const DeliveryView: React.FC = () => {
                Llamar
             </a>
           </div>
+
+          {order.deliveryAssignedTo === currentDeliveryManId && (
+            <button 
+              onClick={() => handleReleaseOrder(order.id)}
+              className="w-full bg-stone-100 text-stone-600 py-3 rounded-xl font-bold hover:bg-stone-200 transition text-center flex items-center justify-center text-[10px] uppercase mt-2"
+            >
+               <i className="fa-solid fa-hand-holding-hand mr-2"></i>
+               Eliminar Recogida / Liberar
+            </button>
+          )}
         </div>
       </div>
       
@@ -189,7 +290,9 @@ const DeliveryView: React.FC = () => {
         <div className="bg-white p-4 rounded-3xl shadow-sm border border-stone-100 flex items-center space-x-4">
           <div className="text-right">
             <p className="text-[10px] font-black uppercase text-orange-400 tracking-widest">En Línea</p>
-            <p className="font-black text-stone-800 text-sm">Juan Repartidor</p>
+            <p className="font-black text-stone-800 text-sm">{currentPerson?.name}</p>
+            <p className="text-[10px] font-black text-green-600 uppercase tracking-widest">Efectivo: RD$ {collectedCash}</p>
+            <button onClick={handleLogout} className="text-[10px] font-bold text-red-500 uppercase hover:underline">Cerrar Sesión</button>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-orange-100 flex items-center justify-center text-orange-600">
             <i className="fa-solid fa-motorcycle text-xl"></i>
@@ -215,6 +318,20 @@ const DeliveryView: React.FC = () => {
 
       {activeTab === 'ACTIVE' ? (
         <div className="space-y-12">
+          {/* Section: Available Orders */}
+          {availableOrders.length > 0 && (
+            <section className="space-y-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-1.5 h-8 bg-stone-800 rounded-full"></div>
+                <h3 className="text-xl font-black uppercase tracking-tighter text-stone-800">Pedidos Disponibles</h3>
+                <span className="bg-stone-100 text-stone-600 text-[10px] font-black px-2 py-1 rounded-lg">{availableOrders.length}</span>
+              </div>
+              <div className="space-y-6">
+                {availableOrders.map(order => renderOrderCard(order))}
+              </div>
+            </section>
+          )}
+
           {/* Section: In Transit */}
           {inTransitOrders.length > 0 && (
             <section className="space-y-6">
@@ -224,9 +341,7 @@ const DeliveryView: React.FC = () => {
                 <span className="bg-orange-100 text-orange-600 text-[10px] font-black px-2 py-1 rounded-lg">{inTransitOrders.length}</span>
               </div>
               <div className="space-y-6">
-                {inTransitOrders.map(order => (
-                  <OrderCard key={order.id} order={order} />
-                ))}
+                {inTransitOrders.map(order => renderOrderCard(order))}
               </div>
             </section>
           )}
@@ -244,19 +359,17 @@ const DeliveryView: React.FC = () => {
                   <p className="text-stone-400 font-bold uppercase tracking-widest text-xs">Sin nuevas recolecciones</p>
                 </div>
               ) : (
-                readyToPickUp.map(order => (
-                  <OrderCard key={order.id} order={order} />
-                ))
+                readyToPickUp.map(order => renderOrderCard(order))
               )}
             </div>
           </section>
 
-          {activeOrders.length === 0 && (
+          {activeOrders.length === 0 && availableOrders.length === 0 && (
             <div className="bg-white rounded-[2.5rem] p-20 text-center border-2 border-dashed border-stone-200 shadow-sm">
               <div className="w-20 h-20 bg-stone-50 rounded-full flex items-center justify-center mx-auto mb-6">
                 <i className="fa-solid fa-mug-hot text-4xl text-stone-200"></i>
               </div>
-              <p className="text-stone-400 font-bold uppercase tracking-widest text-sm">Sin tareas asignadas</p>
+              <p className="text-stone-400 font-bold uppercase tracking-widest text-sm">Sin tareas asignadas ni disponibles</p>
               <p className="text-stone-300 text-xs mt-2">Disfruta un cafecito mientras llega una orden.</p>
             </div>
           )}
